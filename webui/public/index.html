@@ -7,20 +7,33 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <h1 class="caption">Can it run DOOM: Amazon Bedrock AgentCore</h1>
   <main class="layout">
     <section class="game">
       <div id="screen" tabindex="0">
         <canvas id="canvas" width="320" height="200"></canvas>
         <div id="overlay">Click to play</div>
+        <div id="start">
+          <div class="start-buttons">
+            <button id="start-btn" class="start-choice" type="button">
+              <span class="line1">Let's play DOOM</span><span class="line2">(with full sound!)</span>
+            </button>
+            <button id="start-muted-btn" class="start-choice quiet" type="button">
+              <span class="line1">Let's play DOOM</span><span class="line2">(with sounds off)</span>
+            </button>
+          </div>
+          <!-- Filled from .help by app.js, so the controls are listed once. -->
+          <p id="start-help"></p>
+        </div>
+        <button id="sound" type="button" title="Sound on: click to mute" aria-label="Sound on: click to mute">🔊</button>
       </div>
       <div id="status">
         <span id="conn">disconnected</span>
-        <button id="sound" type="button">sound: click game to enable</button>
         <span id="stats"></span>
       </div>
       <p class="help">
         WASD move/turn &middot; K fire &middot; L open/use &middot; Shift run &middot; Alt+A/D strafe
-        &middot; 1-7 weapons &middot; Tab map &middot; Esc menu (arrows + Enter in menus)
+        <br>1-7 weapons &middot; Tab map &middot; Esc menu (arrows + Enter in menus)
       </p>
     </section>
 

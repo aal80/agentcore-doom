@@ -2,8 +2,9 @@
 // Bedrock AgentCore Runtime (ACR), adding SigV4 signatures.
 //
 // Browser-facing contract mirrors ACR's own: POST /invocations with a JSON body; the response (JSON or SSE) is
-// piped back unbuffered. There is exactly one game, so every request is sent with the same hardcoded ACR session
-// id (SESSION_ID below), which keeps routing to the same sandbox for its lifetime (up to 8 h).
+// piped back unbuffered. Each browser tab is its own game: it sends a random 32-char id in the X-Doom-Session
+// header on every request, and that id (prefixed, see acrSessionId) is the ACR session id. The same session id
+// keeps routing to the same sandbox (microVM, with its running game); a new id gets a new sandbox.
 //
 // Env:
 //   AGENT_RUNTIME_ARN  ACR runtime ARN (required unless LOCAL_AGENT_URL is set)
@@ -22,10 +23,9 @@ import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } from "@aws-sdk/clie
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 
 const SESSION_HEADER = "x-amzn-bedrock-agentcore-runtime-session-id";
-// The one game session. ACR requires 33-256 chars. Same id on every request -> same sandbox (microVM) and game;
-// without it each POST would land on a new sandbox. After idle timeout / max lifetime, ACR starts a fresh
-// sandbox (new game) under the same id.
-const SESSION_ID = "agentcore-doom-game-session-000000000001";
+// The browser's game session id: 32 hex chars (a UUID without hyphens).
+const BROWSER_SESSION_HEADER = "x-doom-session";
+const BROWSER_SESSION_RE = /^[0-9a-f]{32}$/i;
 const MAX_BODY_BYTES = 1024 * 1024;
 
 const { AGENT_RUNTIME_ARN, LOCAL_AGENT_URL } = process.env;
@@ -92,7 +92,15 @@ async function invokeLocal(payload, sessionId, signal) {
   };
 }
 
+// ACR session ids must be 33-256 chars, so the browser's 32-char id gets a prefix.
+const acrSessionId = (browserId) => `doom-${browserId.toLowerCase()}`;
+
 async function handleInvocation(req, res) {
+  // Required: without a session id, ACR would start a new sandbox (a new game) for every request.
+  const browserId = req.headers[BROWSER_SESSION_HEADER];
+  if (!BROWSER_SESSION_RE.test(browserId ?? "")) {
+    return sendJson(res, 400, { error: "ValidationException", message: "X-Doom-Session header required: 32 hex chars" });
+  }
   const payload = await readBody(req);
 
   // Abort the upstream call when the browser goes away, so ACR streams don't leak.
@@ -100,7 +108,7 @@ async function handleInvocation(req, res) {
   res.on("close", () => upstream.abort());
 
   const invoke = acr ? invokeAcr : invokeLocal;
-  const out = await invoke(payload, SESSION_ID, upstream.signal);
+  const out = await invoke(payload, acrSessionId(browserId), upstream.signal);
 
   res.writeHead(out.status, {
     "content-type": out.contentType || "application/octet-stream",

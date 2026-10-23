@@ -13,6 +13,21 @@ body {
   font: 14px/1.4 system-ui, sans-serif;
 }
 
+/* Doom-logo look without a web font: condensed heavy type, orange-to-blood-red fill, dark outline. */
+.caption {
+  margin: 8px 16px 0;
+  text-align: center;
+  font: 400 34px/1.1 Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: linear-gradient(#ffd34d, #ff8a00 35%, #d62a00 70%, #7a0a00);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-stroke: 1px #2a0400;
+  filter: drop-shadow(2px 3px 0 #000);
+}
+
 /* Two panels: game screen on the left, architecture diagram on the right, same height. The status line and
    help sit in their own rows under the screen, so the diagram panel's row is exactly as tall as the canvas. */
 .layout {
@@ -25,7 +40,7 @@ body {
     "help   .";
   column-gap: 24px;
   max-width: 1440px;
-  margin: 24px auto;
+  margin: 10px auto 24px;
   padding: 0 16px;
 }
 
@@ -75,6 +90,98 @@ body {
   display: none;
 }
 
+/* Start screen, shown until "Let's play DOOM" is pressed; sits above the click-to-play overlay. */
+#start {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgb(0 0 0 / 0.75);
+  color: #ddd;
+  font-size: 18px;
+}
+
+#start[hidden] {
+  display: none;
+}
+
+/* The click-to-play overlay would show through the start screen. */
+#screen:has(#start:not([hidden])) #overlay {
+  display: none;
+}
+
+/* Stacked: the full-sound start on top, the muted one below. */
+.start-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Two lines: "Let's play DOOM" and the sound choice underneath. */
+.start-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 26px;
+  color: #fff;
+  background: #b71c1c;
+  border: 2px solid #ff5252;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.start-choice:hover {
+  background: #d32f2f;
+}
+
+.start-choice .line1 {
+  font: 600 22px system-ui, sans-serif;
+}
+
+.start-choice .line2 {
+  font: 400 15px system-ui, sans-serif;
+}
+
+/* The full-sound start is the main choice: 50% larger. */
+#start-btn {
+  padding: 18px 39px;
+  border-radius: 12px;
+}
+
+#start-btn .line1 {
+  font-size: 33px;
+}
+
+#start-btn .line2 {
+  font-size: 22px;
+}
+
+/* Same shape, transparent: the muted start. */
+.start-choice.quiet {
+  background: transparent;
+  border-color: rgb(255 255 255 / 0.6);
+}
+
+.start-choice.quiet:hover {
+  background: rgb(255 255 255 / 0.1);
+}
+
+#start p {
+  margin: 0;
+}
+
+#start-help {
+  max-width: 80%;
+  text-align: center;
+  font-size: 15px;
+  color: #eee;
+}
+
 #status {
   display: flex;
   justify-content: space-between;
@@ -82,17 +189,34 @@ body {
   font-family: ui-monospace, monospace;
 }
 
-#status button {
-  font: inherit;
-  color: inherit;
-  background: none;
-  border: 1px solid #444;
-  border-radius: 4px;
+/* Sound on/off, top right of the game screen, above the overlays. */
+#sound {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font-size: 20px;
+  line-height: 40px;
+  text-align: center;
+  background: rgb(0 0 0 / 0.55);
+  border: 1px solid rgb(255 255 255 / 0.25);
+  border-radius: 50%;
   cursor: pointer;
 }
 
+#sound:hover {
+  background: rgb(0 0 0 / 0.8);
+}
+
+#sound.loading {
+  opacity: 0.5;
+}
+
 .help {
-  color: #888;
+  color: #ddd;
 }
 
 /* ---- Architecture panel ---- */

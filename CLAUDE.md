@@ -26,7 +26,7 @@ ACR uses SigV4 auth, so the browser only talks to `webui/`, which signs requests
 ## Working rules
 
 - Never run `terraform apply`, `make deploy` or `make destroy`; the user applies. Use `terraform fmt`, `validate` and `plan` only.
-- Test the web UI only through the single server on port 3001, which the user watches live. The webui sends one hardcoded session ID, so test input drives the user's game.
+- Test the web UI only through the single server on port 3001, which the user watches live. Each browser tab has its own session (game), so test tabs don't touch the user's game.
 
 ## Project memory
 

@@ -10,6 +10,10 @@ import { loadConfig, pulse, setRates } from "/diagram.js";
 const WIDTH = 320;
 const HEIGHT = 200;
 
+// This tab's game: a new random session id on every page load, sent with every request (the webui uses it as
+// the AgentCore session id). Different browsers and tabs play independent games; a reload starts a new one.
+const sessionId = crypto.randomUUID().replaceAll("-", "");
+
 // There's a single game: the webui sends every request to ACR with the same hardcoded session id, so all
 // tabs and reloads share one sandbox. The browser doesn't deal with session ids at all.
 
@@ -18,6 +22,9 @@ const ctx = document.getElementById("canvas").getContext("2d");
 const connEl = document.getElementById("conn");
 const statsEl = document.getElementById("stats");
 const soundBtn = document.getElementById("sound");
+const startEl = document.getElementById("start");
+// The controls, also shown under the start button so they're visible before the game starts.
+document.getElementById("start-help").innerHTML = document.querySelector(".help").innerHTML;
 const image = ctx.createImageData(WIDTH, HEIGHT);
 const pixels = new Uint32Array(image.data.buffer);
 const palette = new Uint32Array(256);
@@ -29,7 +36,7 @@ function invoke(body, signal) {
   }
   return fetch("/invocations", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-doom-session": sessionId },
     body: JSON.stringify(body),
     signal,
   });
@@ -180,13 +187,14 @@ function initAudio() {
   if (audio) return audio.resume();
   audio = new AudioContext();
   master = audio.createGain();
+  master.gain.value = muted ? 0 : 1; // the player may have muted before starting
   master.connect(audio.destination);
   musicGain = audio.createGain();
   audio.createMediaElementSource(musicEl).connect(musicGain).connect(master);
   applyMusic();
   loadSounds().catch((err) => {
     console.warn("loading sounds failed:", err);
-    soundBtn.textContent = "sound: failed";
+    setSoundButton("⚠️", "Sound failed to load");
   });
 }
 
@@ -213,7 +221,7 @@ async function fetchSounds() {
 }
 
 async function loadSounds() {
-  soundBtn.textContent = "sound: loading…";
+  setSoundButton(muted ? "🔇" : "🔊", "Sound: loading…", { loading: true });
   const { sounds } = await fetchSounds();
   for (const [name, { rate, pcm }] of Object.entries(sounds)) {
     const bytes = base64ToBytes(pcm);
@@ -305,14 +313,26 @@ let muted = false;
 
 function updateSoundButton() {
   master.gain.value = muted ? 0 : 1;
-  soundBtn.textContent = muted ? "sound: off" : "sound: on";
+  if (muted) setSoundButton("🔇", "Sound off: click to turn on");
+  else setSoundButton("🔊", "Sound on: click to mute");
+}
+
+function setSoundButton(icon, label, { loading = false } = {}) {
+  soundBtn.textContent = icon;
+  soundBtn.title = label;
+  soundBtn.setAttribute("aria-label", label);
+  soundBtn.classList.toggle("loading", loading);
 }
 
 // Keep keyboard focus on the game when toggling sound.
 soundBtn.addEventListener("mousedown", (e) => e.preventDefault());
+// The button sits on the game screen, whose pointerdown enables audio; without this, the first click would
+// enable audio there and then immediately mute it here.
+soundBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
 soundBtn.addEventListener("click", () => {
-  if (!audio) return initAudio();
   muted = !muted;
+  // Before the game starts there's no audio yet: just remember the choice (initAudio applies it).
+  if (!audio) return setSoundButton(muted ? "🔇" : "🔊", muted ? "Sound off: click to turn on" : "Sound on: click to mute");
   updateSoundButton();
 });
 
@@ -390,6 +410,17 @@ setInterval(() => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-screen.focus();
+// The stream (and with it the AgentCore session) only starts on "Let's play DOOM", so just opening the page
+// costs nothing. The click also counts as the user gesture that browsers require before playing audio.
+function start({ withSound }) {
+  muted = !withSound;
+  startEl.hidden = true;
+  initAudio();
+  if (muted) setSoundButton("🔇", "Sound off: click to turn on");
+  screen.focus();
+  runStream();
+}
+document.getElementById("start-btn").addEventListener("click", () => start({ withSound: true }));
+document.getElementById("start-muted-btn").addEventListener("click", () => start({ withSound: false }));
+
 loadConfig();
-runStream();
