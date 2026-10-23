@@ -1,0 +1,9 @@
+{
+  "name": "doom-agent",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "dependencies": {
+    "sharp": "^0.35.5"
+  }
+}

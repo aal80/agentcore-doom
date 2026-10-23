@@ -1,0 +1,16 @@
+{
+  "name": "webui",
+  "version": "1.0.0",
+  "description": "Doom web UI and SigV4 proxy to Bedrock AgentCore Runtime",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1156.0",
+    "@smithy/node-http-handler": "^4.12.1"
+  },
+  "private": true
+}
