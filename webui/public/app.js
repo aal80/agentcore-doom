@@ -410,7 +410,7 @@ setInterval(() => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// The stream (and with it the AgentCore session) only starts on "Let's play DOOM", so just opening the page
+// The stream (and with it the AgentCore session) only starts on "Let's play", so just opening the page
 // costs nothing. The click also counts as the user gesture that browsers require before playing audio.
 function start({ withSound }) {
   muted = !withSound;

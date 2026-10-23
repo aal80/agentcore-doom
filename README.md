@@ -1,6 +1,6 @@
-# Can it run DOOM: AWS Bedrock AgentCore
+# Can it run Doom? Amazon Bedrock AgentCore
 
-This is an experiment of running Doom on [Amazon Bedrock AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-how-it-works.html), played in a web browser.
+This is an experiment of running Freedoom on [Amazon Bedrock AgentCore Runtime](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-how-it-works.html), played in a web browser.
 
 <img src="docs/architecture.png">
 
@@ -10,7 +10,7 @@ The game engine runs in an AgentCore Runtime v2. The browser draws the frames it
 
 ## How it works
 
-- **Browser** (`webui/public`): a start screen (**Let's play DOOM** with full sound, or with sounds off), then the game on a canvas, sound effects and music with Web Audio (a sound on/off control in the top right corner), and key presses. A live diagram next to the game shows the traffic.
+- **Browser** (`webui/public`): a start screen (**Let's play** with full sound, or with sounds off), then the game on a canvas, sound effects and music with Web Audio (a sound on/off control in the top right corner), and key presses. A live diagram next to the game shows the traffic.
 - **webui** (`webui/server.js`): serves the page and proxies every request to AgentCore Runtime, signing it with SigV4. It runs on AWS Lambda Web Functions.
   - Every browser tab is its own game. On startup the page generates a random 32-character session ID and sends it with every request; the webui uses it as the AgentCore session ID, so each tab gets its own runtime session (microVM) and game. A reload starts a new game.
 - **AgentCore Runtime** (`doom/`): an ARM64 container on platform version V2, so new sessions start from a snapshot. Inside it:
@@ -41,7 +41,7 @@ make local    # builds the image, runs it on :8080, serves the UI on http://loca
 make deploy   # npm ci + terraform init/apply
 ```
 
-See the `webui_url` output, open it and press **Let's play DOOM**.
+See the `webui_url` output, open it and press **Let's play**.
 
 To run the web UI locally against the deployed runtime (requests are signed with your local AWS credentials):
 
