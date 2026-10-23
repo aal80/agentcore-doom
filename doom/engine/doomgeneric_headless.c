@@ -112,13 +112,13 @@ int main(int argc, char **argv)
 
     // Game key bindings, applied after doomgeneric_Create() has loaded the config file so they always win.
     // Only in-game actions change: menus keep arrows/Enter/Esc, and cheats/save names still get raw letters.
-    // WASD = forward/back/turn, ',' (the < key) = fire, '.' (the > key) = use/open.
+    // WASD = forward/back/turn, K = fire, L = use/open (K/L have no other default binding in menus or the automap).
     key_up = 'w';
     key_down = 's';
     key_left = 'a';
     key_right = 'd';
-    key_fire = ',';
-    key_use = '.';
+    key_fire = 'k';
+    key_use = 'l';
 
     for (;;)
     {

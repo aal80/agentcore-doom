@@ -66,12 +66,12 @@ const MUSIC_OPS = { 1: "play", 2: "stop", 3: "pause", 4: "resume", 5: "volume" }
 const MAX_BODY_BYTES = 64 * 1024;
 
 // KeyboardEvent.code -> Doom key code (doomkeys.h). This is a plain keyboard mapping; which key does what in the
-// game is set by the engine's key_* bindings (engine/doomgeneric_headless.c: WASD move/turn, ',' fire, '.' use).
+// game is set by the engine's key_* bindings (engine/doomgeneric_headless.c: WASD move/turn, K fire, L use).
 const KEY = {
   ArrowRight: 0xae, ArrowLeft: 0xac, ArrowUp: 0xad, ArrowDown: 0xaf, // menus, automap
   Comma: 0x2c, Period: 0x2e,
-  Space: 0xa2,               // KEY_USE: unbound now that use is on '.'
-  ControlLeft: 0xa3, ControlRight: 0xa3, // KEY_FIRE: unbound now that fire is on ','
+  Space: 0xa2,               // KEY_USE: unbound now that use is on L
+  ControlLeft: 0xa3, ControlRight: 0xa3, // KEY_FIRE: unbound now that fire is on K
   ShiftLeft: 0x80 + 0x36, ShiftRight: 0x80 + 0x36, // run
   AltLeft: 0x80 + 0x38, AltRight: 0x80 + 0x38,     // strafe modifier
   Escape: 27, Enter: 13, Tab: 9, Backspace: 0x7f,

@@ -54,7 +54,7 @@ Once done playing, destroy the resources.
 make destroy  # removes everything again
 ```
 
-**Controls:** WASD move and turn · `<` fire · `>` open/use · Shift run · Esc menu (use the arrows and Enter in menus).
+**Controls:** WASD move and turn · K fire · L open/use · Shift run · Esc menu (use the arrows and Enter in menus).
 
 ## Limits worth knowing
 
