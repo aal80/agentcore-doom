@@ -10,7 +10,9 @@
   "type": "module",
   "dependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1156.0",
-    "@smithy/node-http-handler": "^4.12.1"
+    "@smithy/node-http-handler": "^4.12.1",
+    "@smithy/signature-v4": "^5.7.4",
+    "ws": "^8.22.0"
   },
   "private": true
 }

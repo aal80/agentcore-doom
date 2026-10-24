@@ -76,7 +76,8 @@ resource "aws_iam_role_policy_attachment" "webui_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# The proxy invokes only the doom runtime (the runtime ARN, and its endpoints such as DEFAULT).
+# The webui talks only to the doom runtime (the runtime ARN, and its endpoints such as DEFAULT): a WebSocket per
+# session for frames, audio events and input, and InvokeAgentRuntime for the sound and music downloads.
 resource "aws_iam_role_policy" "webui_invoke_runtime" {
   name = "invoke-doom-runtime"
   role = aws_iam_role.webui.id
@@ -85,7 +86,10 @@ resource "aws_iam_role_policy" "webui_invoke_runtime" {
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
-      Action = "bedrock-agentcore:InvokeAgentRuntime"
+      Action = [
+        "bedrock-agentcore:InvokeAgentRuntime",
+        "bedrock-agentcore:InvokeAgentRuntimeWithWebSocketStream",
+      ]
       Resource = [
         aws_bedrockagentcore_agent_runtime.doom.agent_runtime_arn,
         "${aws_bedrockagentcore_agent_runtime.doom.agent_runtime_arn}/*",
@@ -132,8 +136,8 @@ resource "awscc_lambda_web_function_revision" "webui" {
 
   service_config = {
     execution_role_arn = aws_iam_role.webui.arn
-    # The SSE frame stream is one long request; the timeout bounds the whole stream (max 900 s). The client
-    # reconnects when it ends (ACR already ends streams at ~100 MB, i.e. after ~2.5 min).
+    # The browser's SSE frame stream is one long request; the timeout bounds the whole stream (max 900 s). The webui
+    # ends streams at 840 s and the client reconnects (the WebSocket to the runtime stays open).
     timeout_seconds = 900
     # Lowest cap that still works (1 is valid but breaks the app): with max_environments = 2 the endpoint takes at
     # most 8 requests in flight, and excess requests get HTTP 429 (not queued). One player needs the long-lived

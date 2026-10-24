@@ -1,10 +1,10 @@
 // AgentCore Runtime agent that runs Doom.
 //
 // Implements the ACR HTTP contract on 0.0.0.0:8080:
-//   GET  /ping         Healthy / HealthyBusy (busy while at least one browser stream is open)
+//   GET  /ping         Healthy / HealthyBusy (busy while at least one socket is subscribed to frames)
+//   GET  /ws           WebSocket (InvokeAgentRuntimeWithWebSocketStream): frames, audio events and input, see below.
+//                      The webui keeps one per session per execution environment.
 //   POST /invocations  JSON body, dispatched on "type":
-//     {"type":"stream"}                                   -> SSE stream of frames (see below)
-//     {"type":"input","events":[{"code":"ArrowUp","down":true}, ...]}  -> JSON ack
 //     {"type":"sounds"}                                   -> JSON {sounds: {DSPISTOL: {rate, pcm: base64 u8}}}
 //     {"type":"music","lump":"D_E1M1"}                    -> audio/mpeg (pre-rendered at image build time)
 //
@@ -16,17 +16,22 @@
 // music index) and the Doom engine itself, started and running at the title screen (its init took ~6 s in a
 // freshly restored microVM). Restored sessions resume that game; if it exits, it's restarted on demand.
 //
-// SSE events:
-//   event: hello   data: {"width":320,"height":200,"frameFormat":"webp","sandbox":"<id>","sounds":"<sounds version>"}
-//   event: frame   data: base64 of the frame in hello.frameFormat: "webp" (320x200 lossy WebP q85, default) or
-//                  "deflate" (deflate-raw(768 bytes RGB palette + 320*200 palette indices), lossless, ~1.5x larger)
-//   event: sound   data: [["s",ch,vol,sep,"DSPISTOL"], ["u",ch,vol,sep], ["x",ch], ...]   start/update/stop, one batch
-//                  per engine output chunk (~one game tic); vol 0-127, sep 0 (left) - 254 (right)
-//   event: music   data: {"op":"play"|"stop"|"pause"|"resume"|"volume","lump":"D_E1M1","loop":true,"vol":0-127}
-//                  (current music state is also sent right after hello, so late joiners hear the right track)
-//   event: end     data: {"reason":"..."}   (client should reconnect)
+// WebSocket protocol. ACR drops whatever the agent sends before the client's first message, so the agent never
+// speaks first: the webui opens with {"t":"hello"} and the agent answers.
+// webui -> agent:
+//   {"t":"hello"}                                          -> hello (below)
+//   {"t":"subscribe","on":true|false}                      frames + audio events only go to subscribed sockets;
+//                                                          subscribing also sends the current music and picture
+//   {"t":"input","events":[{"code":"ArrowUp","down":true}, ...]}
+// agent -> webui:
+//   text   {"t":"hello","width":320,"height":200,"frameFormat":"webp","sandbox":"<id>","sounds":"<sounds version>"}
+//   text   {"t":"sound","ev":[["s",ch,vol,sep,"DSPISTOL"], ["u",ch,vol,sep], ["x",ch], ...]}  start/update/stop,
+//          one batch per engine output chunk (~one game tic); vol 0-127, sep 0 (left) - 254 (right)
+//   text   {"t":"music","op":"play"|"stop"|"pause"|"resume"|"volume","lump":"D_E1M1","loop":true,"vol":0-127}
+//   binary one frame in hello.frameFormat: "webp" (320x200 lossy WebP q85, default) or "deflate"
+//          (deflate-raw(768 bytes RGB palette + 320*200 palette indices), lossless, ~1.5x larger)
 //
-// Env: DOOM_BIN, DOOM_IWAD, DOOM_ARGS (extra args), PORT, STREAM_MAX_SECONDS, MAX_FPS, FRAME_FORMAT, FRAME_QUALITY
+// Env: DOOM_BIN, DOOM_IWAD, DOOM_ARGS (extra args), PORT, MAX_FPS, FRAME_FORMAT, FRAME_QUALITY
 
 import fs from "node:fs";
 import http from "node:http";
@@ -35,6 +40,7 @@ import zlib from "node:zlib";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import sharp from "sharp";
+import { WebSocketServer } from "ws";
 import { readSounds } from "./wad.js";
 
 const PORT = Number(process.env.PORT || 8080);
@@ -42,11 +48,8 @@ const DOOM_BIN = process.env.DOOM_BIN || "/game/doomgeneric_headless";
 const DOOM_IWAD = process.env.DOOM_IWAD || "/game/freedoom1.wad";
 const DOOM_ARGS = (process.env.DOOM_ARGS || "").split(" ").filter(Boolean);
 const MUSIC_DIR = process.env.MUSIC_DIR || "/game/music";
-// ACR caps a streaming response at 60 min; end it a little earlier so the client reconnects cleanly.
-const STREAM_MAX_MS = Number(process.env.STREAM_MAX_SECONDS || 55 * 60) * 1000;
 // Optional frame-rate cap to trade smoothness for bandwidth; 0 = send every distinct frame (~35 fps).
 const MAX_FPS = Number(process.env.MAX_FPS || 0);
-const KEEPALIVE_MS = 15000;
 // WebP q85 (user choice): ~20 KB/frame vs ~30 KB lossless deflate (~7.6 vs ~11 Mbit/s at 35 fps), crisp pixel art.
 const FRAME_FORMAT = process.env.FRAME_FORMAT === "deflate" ? "deflate" : "webp";
 const FRAME_QUALITY = Number(process.env.FRAME_QUALITY || 85);
@@ -64,6 +67,10 @@ const SOUND_VOL_EPS = 1;
 const SOUND_SEP_EPS = 2;
 const MUSIC_OPS = { 1: "play", 2: "stop", 3: "pause", 4: "resume", 5: "volume" };
 const MAX_BODY_BYTES = 64 * 1024;
+// ACR closes a WebSocket that gets a frame over 64 KB; WebP frames are ~20 KB, so this only guards odd ones.
+const MAX_WS_FRAME_BYTES = 64 * 1024 - 1024;
+// Per-socket send buffer above which frames are dropped for that socket (it gets the next one).
+const MAX_BUFFERED_BYTES = 64 * 1024;
 
 // KeyboardEvent.code -> Doom key code (doomkeys.h). This is a plain keyboard mapping; which key does what in the
 // game is set by the engine's key_* bindings (engine/doomgeneric_headless.c: WASD move/turn, K fire, L use).
@@ -86,7 +93,7 @@ for (let d = 0; d <= 9; d++) KEY[`Digit${d}`] = 48 + d;
 // ---- Doom process ----
 
 let doom = null;
-const streams = new Set();
+const subscribers = new Set(); // WebSockets that want frames + audio events
 
 // Resolves when the engine has drawn its first frame, i.e. finished initializing.
 const firstFrame = Promise.withResolvers();
@@ -123,14 +130,15 @@ function startDoom() {
   proc.on("exit", (code, signal) => {
     console.log(`doom exited code=${code} signal=${signal}`);
     if (doom === proc) doom = null;
-    for (const s of streams) endStream(s, "doom exited");
+    // Someone is watching (e.g. the player quit from the menu): start a new game for them.
+    if (subscribers.size > 0) startDoom();
   });
   doom = proc;
   return proc;
 }
 
 let lastFrame = null; // newest distinct frame from the engine
-let lastFrameMsg = null; // its SSE message, once encoded
+let lastFrameData = null; // its encoded bytes, once encoded
 let lastSentAt = 0;
 let encoding = false;
 
@@ -140,30 +148,23 @@ function broadcastFrame(frame) {
   const now = Date.now();
   if (MAX_FPS && now - lastSentAt < (1000 / MAX_FPS) * 0.8) return;
   lastFrame = frame;
-  lastFrameMsg = null;
-  if (streams.size === 0) return;
+  lastFrameData = null;
+  if (subscribers.size === 0) return;
   lastSentAt = now;
   if (!encoding) encodeAndSend();
 }
 
-// Encodes the newest frame (WebP runs in libvips' thread pool, off the event loop) and sends it to every stream.
-// Frames that arrive during an encode replace each other, so a slow encode drops frames instead of queueing.
+// Encodes the newest frame (WebP runs in libvips' thread pool, off the event loop) and sends it to every
+// subscriber. Frames that arrive during an encode replace each other, so a slow encode drops frames.
 async function encodeAndSend() {
   encoding = true;
   try {
-    while (lastFrame && !lastFrameMsg && streams.size > 0) {
+    while (lastFrame && !lastFrameData && subscribers.size > 0) {
       const frame = lastFrame;
-      const msg = await encodeFrame(frame);
-      if (lastFrame === frame) lastFrameMsg = msg;
-      for (const s of streams) {
-        // Drop frames for slow clients instead of queueing; they'll get the next one.
-        if (s.res.writableNeedDrain) {
-          s.dropped++;
-          continue;
-        }
-        s.res.write(msg);
-        s.sent++;
-      }
+      const data = await encodeFrame(frame);
+      if (lastFrame === frame) lastFrameData = data;
+      if (data.length > MAX_WS_FRAME_BYTES) console.warn(`frame skipped: ${data.length} bytes is over the WebSocket frame limit`);
+      for (const ws of subscribers) sendFrame(ws, data);
     }
   } catch (err) {
     console.error(`frame encoding failed: ${err.message}`);
@@ -190,7 +191,24 @@ async function encodeFrame(frame) {
   } else {
     data = zlib.deflateRawSync(frame, { level: 6 });
   }
-  return `event: frame\ndata: ${data.toString("base64")}\n\n`;
+  return data;
+}
+
+// Drops frames for slow sockets instead of queueing; they'll get the next one. Oversized ones are never sent.
+function sendFrame(ws, data) {
+  if (data.length > MAX_WS_FRAME_BYTES || ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+    ws.dropped++;
+    return;
+  }
+  ws.send(data, { binary: true });
+  ws.sent++;
+}
+
+// Text messages go to every subscriber and are never dropped (unlike frames): they're tiny, and a lost stop
+// would leave a sound playing.
+function broadcast(msg) {
+  const text = JSON.stringify(msg);
+  for (const ws of subscribers) ws.send(text);
 }
 
 // Last vol/sep sent per channel, to skip inaudible updates.
@@ -219,17 +237,15 @@ function queueSound(p, batch) {
 }
 
 function broadcastSounds(batch) {
-  if (streams.size === 0) return;
+  if (subscribers.size === 0) return;
   for (const [op, ch, vol, sep] of batch) {
     if (op === "x") soundSent.delete(ch);
     else soundSent.set(ch, { vol, sep });
   }
-  // Never dropped (unlike frames): they're tiny and a lost stop would leave a sound playing.
-  const msg = `event: sound\ndata: ${JSON.stringify(batch)}\n\n`;
-  for (const s of streams) s.res.write(msg);
+  broadcast({ t: "sound", ev: batch });
 }
 
-// Current music state, replayed to streams that connect later (reload, reconnect after 60 min).
+// Current music state, replayed to sockets that subscribe later (reload, reconnect).
 const music = { lump: null, loop: false, vol: 127, paused: false };
 
 function onMusic(p) {
@@ -240,16 +256,13 @@ function onMusic(p) {
   } else if (op === "stop") music.lump = null;
   else if (op === "pause") music.paused = true;
   else if (op === "resume") music.paused = false;
-  const ev = { op, lump: music.lump, loop: music.loop, vol: music.vol };
-  const msg = `event: music\ndata: ${JSON.stringify(ev)}\n\n`;
-  for (const s of streams) s.res.write(msg);
+  broadcast({ t: "music", op, lump: music.lump, loop: music.loop, vol: music.vol });
 }
 
-function musicStateMessage() {
-  const ev = music.lump
-    ? { op: music.paused ? "pause" : "play", lump: music.lump, loop: music.loop, vol: music.vol }
-    : { op: "stop", lump: null, loop: false, vol: music.vol };
-  return `event: music\ndata: ${JSON.stringify(ev)}\n\n`;
+function musicState() {
+  return music.lump
+    ? { t: "music", op: music.paused ? "pause" : "play", lump: music.lump, loop: music.loop, vol: music.vol }
+    : { t: "music", op: "stop", lump: null, loop: false, vol: music.vol };
 }
 
 // ---- /ping status ----
@@ -259,7 +272,7 @@ function musicStateMessage() {
 let pingStatus = "Healthy";
 
 function updatePingStatus() {
-  pingStatus = streams.size > 0 ? "HealthyBusy" : "Healthy";
+  pingStatus = subscribers.size > 0 ? "HealthyBusy" : "Healthy";
 }
 
 // ---- Invocation handlers ----
@@ -270,48 +283,61 @@ function updatePingStatus() {
 let sandboxId = null;
 const sandbox = () => (sandboxId ??= crypto.randomBytes(4).toString("hex"));
 
-function handleStream(req, res) {
-  startDoom();
-  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", "x-accel-buffering": "no" });
-  const hello = { width: WIDTH, height: HEIGHT, frameFormat: FRAME_FORMAT, sandbox: sandbox(), sounds: soundsVersion };
-  res.write(`event: hello\ndata: ${JSON.stringify(hello)}\n\n`);
-  res.write(musicStateMessage());
+// ---- WebSocket ----
 
-  const s = { res, sent: 0, dropped: 0, opened: Date.now() };
-  s.timer = setTimeout(() => endStream(s, "max stream duration"), STREAM_MAX_MS);
-  // Frames stop while the picture is static (e.g. paused); keep intermediaries from idling the stream out.
-  s.keepalive = setInterval(() => res.write(": keepalive\n\n"), KEEPALIVE_MS);
-  streams.add(s);
-  // The current picture right away: cached if already encoded, otherwise encode it now (for every stream).
-  if (lastFrameMsg) res.write(lastFrameMsg);
-  else if (!encoding) encodeAndSend();
-  updatePingStatus();
-  console.log(`stream opened (${streams.size} open)`);
+function onSocket(ws) {
+  ws.sent = 0;
+  ws.dropped = 0;
+  ws.opened = Date.now();
+  console.log(`websocket connected (${wss.clients.size} open)`);
 
-  res.on("close", () => {
-    clearTimeout(s.timer);
-    clearInterval(s.keepalive);
-    streams.delete(s);
-    updatePingStatus();
-    console.log(`stream closed after ${Math.round((Date.now() - s.opened) / 1000)}s sent=${s.sent} dropped=${s.dropped} (${streams.size} open)`);
+  ws.on("message", (data, isBinary) => {
+    if (isBinary) return;
+    let msg;
+    try {
+      msg = JSON.parse(data.toString("utf8"));
+    } catch {
+      return;
+    }
+    if (msg.t === "hello") onHello(ws);
+    else if (msg.t === "subscribe") setSubscribed(ws, msg.on === true);
+    else if (msg.t === "input") onInput(msg.events);
   });
+  ws.on("close", (code) => {
+    setSubscribed(ws, false);
+    const secs = Math.round((Date.now() - ws.opened) / 1000);
+    console.log(`websocket closed (${code}) after ${secs}s sent=${ws.sent} dropped=${ws.dropped} (${wss.clients.size} open)`);
+  });
+  ws.on("error", (err) => console.error(`websocket error: ${err.message}`));
 }
 
-function endStream(s, reason) {
-  if (!streams.has(s)) return;
-  s.res.end(`event: end\ndata: ${JSON.stringify({ reason })}\n\n`);
+function onHello(ws) {
+  startDoom();
+  ws.send(JSON.stringify({ t: "hello", width: WIDTH, height: HEIGHT, frameFormat: FRAME_FORMAT, sandbox: sandbox(), sounds: soundsVersion }));
 }
 
-function handleInput(msg, res) {
-  const events = Array.isArray(msg.events) ? msg.events : [];
+function setSubscribed(ws, on) {
+  if (!on) {
+    if (subscribers.delete(ws)) updatePingStatus();
+    return;
+  }
+  if (subscribers.has(ws)) return;
+  startDoom();
+  // The current state right away: music, then the picture (cached if encoded, else encode now for everyone).
+  ws.send(JSON.stringify(musicState()));
+  subscribers.add(ws);
+  updatePingStatus();
+  if (lastFrameData) sendFrame(ws, lastFrameData);
+  else if (!encoding) encodeAndSend();
+}
+
+function onInput(events) {
   const bytes = [];
-  for (const e of events) {
+  for (const e of Array.isArray(events) ? events : []) {
     const key = KEY[e?.code];
     if (key !== undefined) bytes.push(e.down ? 1 : 0, key);
   }
-  const proc = startDoom();
-  if (bytes.length) proc.stdin.write(Buffer.from(bytes));
-  sendJson(res, 200, { ok: true, accepted: bytes.length / 2, sandbox: sandbox() });
+  if (bytes.length) startDoom().stdin.write(Buffer.from(bytes));
 }
 
 // Static data, loaded at startup (before the V2 snapshot): sound samples from the IWAD, serialized once, and
@@ -369,8 +395,6 @@ const server = http.createServer({ noDelay: true }, async (req, res) => {
     }
     if (req.method === "POST" && req.url.split("?")[0] === "/invocations") {
       const msg = await readJson(req);
-      if (msg.type === "stream") return handleStream(req, res);
-      if (msg.type === "input") return handleInput(msg, res);
       if (msg.type === "sounds") return handleSounds(res);
       if (msg.type === "music") return handleMusic(msg, res);
       return sendJson(res, 400, { error: `unknown type: ${msg.type}` });
@@ -380,6 +404,13 @@ const server = http.createServer({ noDelay: true }, async (req, res) => {
     console.error(`${req.method} ${req.url}: ${err.message}`);
     if (!res.headersSent) sendJson(res, err.status || 500, { error: err.message });
   }
+});
+
+const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
+wss.on("connection", onSocket);
+server.on("upgrade", (req, socket, head) => {
+  if (req.url.split("?")[0] !== "/ws") return socket.destroy();
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
 });
 
 // Start Doom first and only listen (= become healthy, = get snapshotted on V2) once it has drawn a frame.

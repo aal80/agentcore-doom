@@ -1,7 +1,8 @@
 // Browser client: renders the frame stream and sends key events.
 //
-// No WebSockets: frames arrive as SSE on a long-lived POST /invocations {"type":"stream"} (read with fetch,
-// since EventSource can't POST or set headers), and keys go out as short POST /invocations {"type":"input"}.
+// Frames arrive as SSE on a long-lived POST /invocations {"type":"stream"} (read with
+// fetch, since EventSource can't POST or set headers), and keys go out as short POST /invocations {"type":"input"}.
+// The webui relays both over its WebSocket to the agent.
 // Sound effects arrive as events on the same stream and are played locally from samples fetched once;
 // music events name a track, which is fetched as an MP3 (pre-rendered at image build time) and looped.
 
@@ -343,7 +344,8 @@ let queue = [];
 let sending = false;
 
 // Only one input request in flight at a time: events that arrive meanwhile are batched into the next
-// request. Keeps order and naturally coalesces under latency (fewer POSTs against ACR's TPS quota).
+// request. Keeps order and naturally coalesces under latency. The round trip ends at the webui, which
+// forwards the events over its WebSocket.
 async function flushInput() {
   if (sending || queue.length === 0) return;
   sending = true;

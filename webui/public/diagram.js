@@ -41,8 +41,7 @@ export async function loadConfig() {
     if (cfg.mode === "local") {
       document.getElementById("runtime-title").textContent = "Local container";
       document.getElementById("runtime-sub").textContent = `ACR stand-in · ${cfg.target}`;
-      document.getElementById("webui-sub").textContent = "static files · proxy (local mode, unsigned)";
-      document.getElementById("hop2-req").textContent = "POST /invocations";
+      document.getElementById("webui-sub").textContent = "WebSocket bridge (local, unsigned)";
       document.getElementById("hop2-auth").textContent = "unsigned";
     } else {
       document.getElementById("runtime-sub").textContent = `microVM per session · ${cfg.region}`;

@@ -6,24 +6,25 @@ This is an experiment of running Freedoom on [Amazon Bedrock AgentCore Runtime](
 
 > IMPORTANT: This project does not implement authentication. Anyone with your web UI URL can play, every tab is a separate AgentCore session, and you pay for the AWS resources they use. Be careful who you share it with and run `make destroy` to clean up after you're done playing. 
 
-The game engine runs in an AgentCore Runtime v2. The browser draws the frames it receives, plays the sounds, and sends key presses back. There are no WebSockets: the server streams to the browser with Server-Sent Events (SSE), and the browser sends input as plain POST requests, hence expect minor lags. 
+The game engine runs in an AgentCore Runtime v2. The browser draws the frames it receives, plays the sounds, and sends key presses back. The web UI streams to the browser with Server-Sent Events (SSE), and the browser sends input as plain POST requests. Between the web UI and AgentCore Runtime, each game has a WebSocket connection. 
 
 ## How it works
 
 - **Browser** (`webui/public`): a start screen (**Let's play** with full sound, or with sounds off), then the game on a canvas, sound effects and music with Web Audio (a sound on/off control in the top right corner), and key presses. A live diagram next to the game shows the traffic.
-- **webui** (`webui/server.js`): serves the page and proxies every request to AgentCore Runtime, signing it with SigV4. It runs on AWS Lambda Web Functions.
+- **webui** (`webui/server.js`): serves the page and bridges the browser to AgentCore Runtime. It runs on AWS Lambda Web Functions.
+  - Frames, sound and music events, and key presses go over one WebSocket per game to the runtime (`InvokeAgentRuntimeWithWebSocketStream`, signed with SigV4). Downloads go through `InvokeAgentRuntime`.
   - Every browser tab is its own game. On startup the page generates a random 32-character session ID and sends it with every request; the webui uses it as the AgentCore session ID, so each tab gets its own runtime session (microVM) and game. A reload starts a new game.
 - **AgentCore Runtime** (`doom/`): an ARM64 container on platform version V2, so new sessions start from a snapshot. Inside it:
-  - **agent** (`doom/agent`): a Node.js server that implements `/invocations` and `/ping`. It turns engine output into SSE events and key presses into engine input.
+  - **agent** (`doom/agent`): a Node.js server that implements `/ws`, `/invocations` and `/ping`. It turns engine output into WebSocket messages and key presses into engine input.
   - **doomgeneric** (`doom/engine`): a headless build of [doomgeneric](https://github.com/ozkl/doomgeneric) playing [Freedoom](https://freedoom.github.io/). It writes frames and sound/music events to the agent and reads keys from it.
 
-Every request is a `POST /invocations` whose JSON `type` says what it is:
+Every browser request is a `POST /invocations` to the web UI whose JSON `type` says what it is:
 
 | Type | What it does |
 | --- | --- |
-| `stream` | Opens a long-lived SSE stream of frames (320×200 WebP) plus sound and music events. |
-| `input` | Sends key presses. |
-| `sounds`, `music` | Download the sound effect samples (cached in the browser) and the music tracks. Music is pre-rendered to MP3 when the image is built. |
+| `stream` | Opens a long-lived SSE stream of frames (320×200 WebP) plus sound and music events, relayed from the WebSocket. |
+| `input` | Sends key presses, forwarded over the WebSocket. |
+| `sounds`, `music` | Download the sound effect samples (cached in the browser) and the music tracks, through `InvokeAgentRuntime`. Music is pre-rendered to MP3 when the image is built. |
 
 The arrows in the diagram light up live in the UI as traffic flows.
 
@@ -59,9 +60,9 @@ make destroy  # removes everything again
 
 ## Limits worth knowing
 
-- AgentCore ends a streamed response after about 100 MB, which is a few minutes of gameplay.
-- A session lives at most 5 minutes (intentional limit for this experiment, you can set it up to 8 hours). It ends 2 minutes after the last stream closes (`terraform/ac_runtime_doom.tf`). After that, the tab's next request starts a new game.
-- Frames are 320×200 WebP sent as base64 SSE: about 35 fps and 7–8 Mbit/s while moving, almost nothing on static screens.
+- An AgentCore WebSocket lasts at most 60 minutes and carries frames up to 64 KB. The web UI reopens it when it closes, and the agent never sends a frame larger than that (WebP frames are about 20 KB).
+- A session lives at most 5 minutes (intentional limit for this experiment, you can set it up to 8 hours). It ends about 2.5 minutes after the last stream closes: the web UI keeps its WebSocket for 30 more seconds, then the session times out after 2 minutes idle (`terraform/ac_runtime_doom.tf`). After that, the tab's next request starts a new game.
+- Frames are 320×200 WebP, sent as binary WebSocket messages to the web UI and as base64 SSE to the browser: about 35 fps and 7–8 Mbit/s while moving, almost nothing on static screens.
 - Logs: the webui writes to `/aws/lambda/web/agentcore-doom-webui`, the runtime to `/aws/bedrock-agentcore/runtimes/<runtime-id>-DEFAULT`.
 
 ## Credits

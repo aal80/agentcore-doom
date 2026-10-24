@@ -2,7 +2,7 @@
 
 Run Doom (the game) on Amazon Bedrock AgentCore Runtime (ACR), played from a web browser.
 
-Hard constraint: no WebSockets. Server→browser uses SSE; browser→server uses POST requests to ACR.
+Hard constraint: no WebSockets in the browser. Server→browser uses SSE; browser→server uses POST requests to webui. Between webui and ACR, each game session has a WebSocket (one per webui execution environment); sound/music downloads use `InvokeAgentRuntime`.
 
 ACR uses SigV4 auth, so the browser only talks to `webui/`, which signs requests and forwards them to ACR.
 
@@ -10,7 +10,7 @@ ACR uses SigV4 auth, so the browser only talks to `webui/`, which signs requests
 
 - `doom/`: the container deployed to ACR (ARM64, platform V2). It holds:
   - `engine/`: the headless doomgeneric engine, including the sound/music module that emits events.
-  - `agent/server.js`: a Node agent that implements ACR's `/ping` + `/invocations` contract. It encodes frames as WebP with `sharp`.
+  - `agent/server.js`: a Node agent that implements ACR's `/ping`, `/invocations` and `/ws` contract. It encodes frames as WebP with `sharp`.
   - `music/render.mjs`: a build-time step that renders the MIDI tracks to MP3.
 - `webui/`: the SigV4 proxy (`server.js`) plus the browser client (`public/`). The client shows two panels: the game and a live architecture diagram (`diagram.js`). `LOCAL_AGENT_URL` targets a local container unsigned; `AGENT_RUNTIME_ARN` targets ACR.
 - `terraform/`: AWS deployment.
